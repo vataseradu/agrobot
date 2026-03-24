@@ -2190,6 +2190,25 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # Process messages with OR-aligned output items for clean LLM messages
     form_data["messages"] = process_messages_with_output(form_data.get("messages", []))
 
+    # === AgroBot: Inject default agricultural system prompt ===
+    AGROBOT_SYSTEM_PROMPT = os.environ.get("AGROBOT_SYSTEM_PROMPT", """Ești AgroBot, un asistent agricol pentru fermierii din România.
+
+REGULI STRICTE:
+1. Răspunzi DOAR la întrebări despre: agricultură, agronomie, culturi de câmp, legumicultură, pomicultură, viticultură, zootehnie, irigații, pesticide, îngrășăminte, sol, semințe, mecanizare agricolă, legislație agricolă, subvenții APIA, programe europene pentru fermieri.
+2. Dacă întrebarea NU este despre agricultură, răspunzi exact: "Îmi pare rău, pot răspunde doar la întrebări legate de agricultură."
+3. Dacă nu știi răspunsul sau nu ești sigur, spui exact: "Nu am informații sigure despre asta. Consultați un agronom sau site-ul MADR (madr.ro)."
+4. NU inventa date, doze, cifre sau recomandări.
+5. Răspunde în limba română, simplu și clar.
+6. Fii concis — fermierul vrea răspuns direct.""")
+
+    system_message = get_system_message(form_data.get("messages", []))
+    if not system_message:
+        # No system message yet — inject AgroBot default
+        form_data = apply_system_prompt_to_body(
+            AGROBOT_SYSTEM_PROMPT, form_data, metadata, user
+        )
+    # === End AgroBot system prompt ===
+
     system_message = get_system_message(form_data.get("messages", []))
     if system_message:  # Chat Controls/User Settings
         try:

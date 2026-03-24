@@ -84,7 +84,7 @@
 					{#if models[selectedModelIdx]?.name}
 						{models[selectedModelIdx]?.name}
 					{:else}
-						{$i18n.t('Hello, {{name}}', { name: $user?.name })}
+						Bună ziua! Sunt AgroBot 🌾
 					{/if}
 				</div>
 
@@ -117,7 +117,7 @@
 						{/if}
 					{:else}
 						<div class=" text-gray-400 dark:text-gray-500 line-clamp-1 font-p">
-							{$i18n.t('How can I help you today?')}
+							Pune-mi orice întrebare despre agricultură, culturi, pesticide, subvenții APIA sau creșterea animalelor.
 						</div>
 					{/if}
 				</div>
