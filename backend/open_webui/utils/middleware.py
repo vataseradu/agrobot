@@ -2146,12 +2146,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
 
-    # === AgroBot: Force model for non-admin users ===
-    AGROBOT_FORCED_MODEL = os.environ.get("AGROBOT_FORCED_MODEL", "mistral-large-2512")
-    if AGROBOT_FORCED_MODEL and hasattr(user, "role") and user.role != "admin":
-        form_data["model"] = AGROBOT_FORCED_MODEL
-    # === End AgroBot force model ===
-
     # === AgroBot: Enforce max message length for non-admin users ===
     AGROBOT_MAX_MESSAGE_LENGTH = int(os.environ.get("AGROBOT_MAX_MESSAGE_LENGTH", "2000"))
     if hasattr(user, "role") and user.role != "admin":
