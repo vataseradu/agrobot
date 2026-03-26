@@ -2271,26 +2271,17 @@ LIMITA DE LUNGIME:
     # === End AgroBot system prompt ===
 
     # === AgroBot: Inject model parameters for consistent responses ===
+    # Only OpenAI-compatible params (works with Mistral, OpenAI, etc.)
     agrobot_params = {
         "temperature": 0.1,
         "top_p": 0.85,
-        "top_k": 20,
-        "seed": 42,
         "max_tokens": 2048,
-        "repeat_penalty": 1.1,
         "frequency_penalty": 0.3,
         "presence_penalty": 0.0,
     }
-    # Only inject if user/admin hasn't set custom params
-    if "options" not in form_data:
-        form_data["options"] = {}
     for key, value in agrobot_params.items():
-        if key not in form_data.get("options", {}):
-            form_data["options"][key] = value
-        # Also set top-level for OpenAI-compatible APIs
-        if key in ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "seed"):
-            if key not in form_data:
-                form_data[key] = value
+        if key not in form_data:
+            form_data[key] = value
     # === End AgroBot model parameters ===
 
     system_message = get_system_message(form_data.get("messages", []))
