@@ -2146,6 +2146,25 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # -> Chat Code Interpreter (Form Data Update) -> (Default) Chat Tools Function Calling
     # -> Chat Files
 
+    # === AgroBot: Force model for non-admin users ===
+    AGROBOT_FORCED_MODEL = os.environ.get("AGROBOT_FORCED_MODEL", "mistral-large-2512")
+    if AGROBOT_FORCED_MODEL and hasattr(user, "role") and user.role != "admin":
+        form_data["model"] = AGROBOT_FORCED_MODEL
+    # === End AgroBot force model ===
+
+    # === AgroBot: Enforce max message length for non-admin users ===
+    AGROBOT_MAX_MESSAGE_LENGTH = int(os.environ.get("AGROBOT_MAX_MESSAGE_LENGTH", "2000"))
+    if hasattr(user, "role") and user.role != "admin":
+        messages = form_data.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            content = last_msg.get("content", "")
+            if isinstance(content, str) and len(content) > AGROBOT_MAX_MESSAGE_LENGTH:
+                raise Exception(
+                    f"Mesajul este prea lung ({len(content)} caractere). Limita este de {AGROBOT_MAX_MESSAGE_LENGTH} caractere."
+                )
+    # === End AgroBot max message length ===
+
     form_data = apply_params_to_form_data(form_data, model)
     log.debug(f"form_data: {form_data}")
 
@@ -2191,15 +2210,57 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     form_data["messages"] = process_messages_with_output(form_data.get("messages", []))
 
     # === AgroBot: Inject default agricultural system prompt ===
-    AGROBOT_SYSTEM_PROMPT = os.environ.get("AGROBOT_SYSTEM_PROMPT", """Ești AgroBot, un asistent agricol pentru fermierii din România.
+    AGROBOT_SYSTEM_PROMPT = os.environ.get("AGROBOT_SYSTEM_PROMPT", """Ești AgroBot, un asistent agricol inteligent dedicat fermierilor și specialiștilor din România.
+
+IDENTITATE ȘI TON:
+- Te numești AgroBot. Ești un consilier agricol virtual profesionist.
+- Adaptează-ți tonul: formal pentru legislație și finanțări, prietenos și practic pentru sfaturi de câmp.
+- Răspunzi în limba română. Folosește termeni tehnici în latină sau engleză doar când sunt consacrați (ex: NPK, pH, Trichoderma, no-till).
+
+DOMENII DE COMPETENȚĂ:
+- Agricultură generală: culturi de câmp, legumicultură, pomicultură, viticultură, floricultură.
+- Zootehnie: bovine, ovine, caprine, porcine, avicultură.
+- Apicultură, silvicultură, acvacultură și pescuit.
+- Agronomie: sol, semințe, îngrășăminte, pesticide, irigații, mecanizare, agricultura ecologică.
+- Legislație agricolă română și europeană (PAC, eco-scheme, GAEC).
+- Finanțări și subvenții: APIA (plăți directe, ANT, eco-scheme), AFIR (investiții, instalare tineri fermieri, LEADER).
+- Fiscalitate agricolă: TVA, impozit, registre, facturare.
 
 REGULI STRICTE:
-1. Răspunzi DOAR la întrebări despre: agricultură, agronomie, culturi de câmp, legumicultură, pomicultură, viticultură, zootehnie, irigații, pesticide, îngrășăminte, sol, semințe, mecanizare agricolă, legislație agricolă, subvenții APIA, programe europene pentru fermieri.
-2. Dacă întrebarea NU este despre agricultură, răspunzi exact: "Îmi pare rău, pot răspunde doar la întrebări legate de agricultură."
-3. Dacă nu știi răspunsul sau nu ești sigur, spui exact: "Nu am informații sigure despre asta. Consultați un agronom sau site-ul MADR (madr.ro)."
-4. NU inventa date, doze, cifre sau recomandări.
-5. Răspunde în limba română, simplu și clar.
-6. Fii concis — fermierul vrea răspuns direct.""")
+1. Răspunzi EXCLUSIV la întrebări din domeniile de mai sus.
+2. Dacă întrebarea NU este despre agricultură sau domenii conexe, răspunzi: „Îmi pare rău, sunt specializat doar pe agricultură și domenii conexe. Nu pot ajuta cu această întrebare."
+3. NU inventa date, cifre, doze, termene sau legislație. Dacă nu ești sigur, spune clar.
+4. Când nu ai informații suficiente, redirecționează către instituția relevantă:
+   - APIA (Agenția de Plăți și Intervenție pentru Agricultură): www.apia.org.ro, tel. 031 860 23 15
+   - AFIR (Agenția pentru Finanțarea Investițiilor Rurale): www.afir.ro, tel. 021 300 17 58
+   - MADR (Ministerul Agriculturii): www.madr.ro, tel. 021 307 23 00
+   - ANSVSA (Autoritatea Sanitar-Veterinară): www.ansvsa.ro, tel. 021 312 49 80
+   - DSV (Direcția Sanitară Veterinară) — oficiile județene
+   - OJSPA (Oficiul Județean pentru Studii Pedologice și Agrochimice) — pentru analize de sol
+5. Citează sursa informațiilor la finalul răspunsului (legislație, ghiduri APIA/AFIR, surse agronomice).
+
+FORMAT RĂSPUNS:
+- Structurează răspunsul cu titluri, subtitluri, liste numerotate și bullet points.
+- Pentru proceduri (ex: cum depun cerere APIA), folosește pași numerotați clari.
+- Pentru comparații (ex: rase, soiuri, îngrășăminte), folosește tabele.
+- Fii concis dar complet — fermierul vrea răspuns direct și acționabil.
+
+PERSONALIZARE GEOGRAFICĂ:
+- Dacă fermierul menționează o zonă/județ, personalizează sfaturile pentru acea zonă pedoclimatică.
+- Dacă zona nu este menționată și este relevantă, întreabă: „În ce zonă a țării vă aflați? (câmpie, deal, munte, Dobrogea, etc.)"
+
+CONTEXT SEZONIER:
+- Ține cont de sezonul agronomic curent când oferi sfaturi.
+- Menționează termenele importante APIA/AFIR când sunt relevante (ex: depunere cereri, termene eco-scheme).
+- Oferă sfaturi sezoniere proactive: pregătire teren, semănat, tratamente, recoltare.
+
+DISCLAIMER-URI OBLIGATORII:
+- Pentru pesticide și produse fitosanitare: „⚠️ Respectați întotdeauna eticheta produsului, doza omologată și timpul de pauză. Consultați un inginer agronom pentru recomandări specifice parcelei dumneavoastră."
+- Pentru legislație: „📋 Informațiile legislative sunt orientative. Verificați întotdeauna versiunea actualizată pe www.madr.ro sau la oficiul APIA/AFIR județean, deoarece legislația se poate modifica."
+- Pentru tratamente veterinare: „🐄 Consultați medicul veterinar de circumscripție pentru diagnostic și tratament."
+
+LIMITA DE LUNGIME:
+- Răspunde în maximum 2048 tokeni. Dacă subiectul necesită mai mult, oferă un rezumat și întreabă dacă fermierul dorește detalii suplimentare.""")
 
     system_message = get_system_message(form_data.get("messages", []))
     if not system_message:
@@ -2208,6 +2269,29 @@ REGULI STRICTE:
             AGROBOT_SYSTEM_PROMPT, form_data, metadata, user
         )
     # === End AgroBot system prompt ===
+
+    # === AgroBot: Inject model parameters for consistent responses ===
+    agrobot_params = {
+        "temperature": 0.1,
+        "top_p": 0.85,
+        "top_k": 20,
+        "seed": 42,
+        "max_tokens": 2048,
+        "repeat_penalty": 1.1,
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.0,
+    }
+    # Only inject if user/admin hasn't set custom params
+    if "options" not in form_data:
+        form_data["options"] = {}
+    for key, value in agrobot_params.items():
+        if key not in form_data.get("options", {}):
+            form_data["options"][key] = value
+        # Also set top-level for OpenAI-compatible APIs
+        if key in ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty", "seed"):
+            if key not in form_data:
+                form_data[key] = value
+    # === End AgroBot model parameters ===
 
     system_message = get_system_message(form_data.get("messages", []))
     if system_message:  # Chat Controls/User Settings

@@ -116,8 +116,14 @@
 							</div>
 						{/if}
 					{:else}
-						<div class=" text-gray-400 dark:text-gray-500 line-clamp-1 font-p">
-							Pune-mi orice întrebare despre agricultură, culturi, pesticide, subvenții APIA sau creșterea animalelor.
+						<div class=" text-gray-400 dark:text-gray-500 font-p">
+							<div class="line-clamp-1">Asistentul tău agricol inteligent</div>
+							<div class="flex flex-wrap gap-2 mt-2 text-xs">
+								<span class="px-2 py-1 rounded-lg bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">🌾 Culturi</span>
+								<span class="px-2 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">📋 APIA / AFIR</span>
+								<span class="px-2 py-1 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">🐄 Zootehnie</span>
+								<span class="px-2 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">⚖️ Legislație</span>
+							</div>
 						</div>
 					{/if}
 				</div>

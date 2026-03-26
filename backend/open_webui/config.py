@@ -1266,28 +1266,28 @@ except Exception as e:
 if default_prompt_suggestions == []:
     default_prompt_suggestions = [
         {
-            "title": ["Ce culturi pot planta", "pe un sol argilos?"],
-            "content": "Ce culturi sunt potrivite pentru un sol argilos în zona de câmpie din România?",
+            "title": ["🌾 Ce culturi recomandați", "pentru zona mea?"],
+            "content": "Ce culturi sunt potrivite pentru zona de câmpie din sud-estul României pe un sol argilos? Ce rotație recomandați?",
         },
         {
-            "title": ["Cum aplic", "pentru subvenții APIA?"],
-            "content": "Care sunt pașii pentru a depune o cerere de subvenții APIA și ce documente am nevoie?",
+            "title": ["📋 Cum depun cererea", "APIA pentru subvenții?"],
+            "content": "Care sunt pașii pentru a depune o cerere de plăți directe APIA și ce documente am nevoie? Care sunt termenele limită?",
         },
         {
-            "title": ["Ce tratamente aplic", "la grâul de toamnă?"],
-            "content": "Ce tratamente fitosanitare recomandați pentru grâul de toamnă împotriva bolilor fungice?",
+            "title": ["🧪 Ce tratamente aplic", "la grâul de toamnă?"],
+            "content": "Ce tratamente fitosanitare recomandați pentru grâul de toamnă împotriva bolilor fungice? Ce doze și ce produse sunt omologate?",
         },
         {
-            "title": ["Cum îmi calculez", "doza de îngrășământ?"],
-            "content": "Cum calculez doza de îngrășământ NPK pentru o cultură de porumb pe un hectar?",
+            "title": ["💰 Ce fonduri AFIR", "pot accesa ca tânăr fermier?"],
+            "content": "Ce programe AFIR sunt disponibile pentru tineri fermieri? Care sunt condițiile de eligibilitate și sumele maxime?",
         },
         {
-            "title": ["Ce rase de vaci", "sunt bune pentru lapte?"],
-            "content": "Ce rase de vaci sunt cele mai productive pentru lapte în condițiile din România?",
+            "title": ["🐄 Ce rase de vaci", "sunt bune pentru lapte?"],
+            "content": "Ce rase de vaci sunt cele mai productive pentru lapte în condițiile din România? Ce producție medie pot obține?",
         },
         {
-            "title": ["Când și cum", "irig culturile?"],
-            "content": "Care este programul optim de irigare pentru o cultură de roșii în câmp deschis?",
+            "title": ["⚖️ Ce obligații legale am", "ca fermier înregistrat?"],
+            "content": "Ce obligații legale și fiscale am ca fermier PFA? Ce registre trebuie să țin și ce declarații trebuie să depun?",
         },
     ]
 
@@ -1330,13 +1330,13 @@ DEFAULT_GROUP_ID = PersistentConfig(
 PENDING_USER_OVERLAY_TITLE = PersistentConfig(
     "PENDING_USER_OVERLAY_TITLE",
     "ui.pending_user_overlay_title",
-    os.environ.get("PENDING_USER_OVERLAY_TITLE", ""),
+    os.environ.get("PENDING_USER_OVERLAY_TITLE", "Cont în așteptare"),
 )
 
 PENDING_USER_OVERLAY_CONTENT = PersistentConfig(
     "PENDING_USER_OVERLAY_CONTENT",
     "ui.pending_user_overlay_content",
-    os.environ.get("PENDING_USER_OVERLAY_CONTENT", ""),
+    os.environ.get("PENDING_USER_OVERLAY_CONTENT", "Contul dumneavoastră este în așteptarea aprobării administratorului. Veți putea utiliza AgroBot după aprobare."),
 )
 
 
@@ -1480,7 +1480,7 @@ USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS = (
 
 
 USER_PERMISSIONS_CHAT_CONTROLS = (
-    os.environ.get("USER_PERMISSIONS_CHAT_CONTROLS", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_CONTROLS", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_VALVES = (
@@ -1488,11 +1488,11 @@ USER_PERMISSIONS_CHAT_VALVES = (
 )
 
 USER_PERMISSIONS_CHAT_SYSTEM_PROMPT = (
-    os.environ.get("USER_PERMISSIONS_CHAT_SYSTEM_PROMPT", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_SYSTEM_PROMPT", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_PARAMS = (
-    os.environ.get("USER_PERMISSIONS_CHAT_PARAMS", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_PARAMS", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_FILE_UPLOAD = (
@@ -1500,7 +1500,7 @@ USER_PERMISSIONS_CHAT_FILE_UPLOAD = (
 )
 
 USER_PERMISSIONS_CHAT_WEB_UPLOAD = (
-    os.environ.get("USER_PERMISSIONS_CHAT_WEB_UPLOAD", "True").lower() == "true"
+    os.environ.get("USER_PERMISSIONS_CHAT_WEB_UPLOAD", "False").lower() == "true"
 )
 
 USER_PERMISSIONS_CHAT_DELETE = (
@@ -2940,7 +2940,7 @@ BYPASS_EMBEDDING_AND_RETRIEVAL = PersistentConfig(
 
 
 RAG_TOP_K = PersistentConfig(
-    "RAG_TOP_K", "rag.top_k", int(os.environ.get("RAG_TOP_K", "3"))
+    "RAG_TOP_K", "rag.top_k", int(os.environ.get("RAG_TOP_K", "5"))
 )
 RAG_TOP_K_RERANKER = PersistentConfig(
     "RAG_TOP_K_RERANKER",
@@ -3156,7 +3156,7 @@ TIKTOKEN_ENCODING_NAME = PersistentConfig(
 
 
 CHUNK_SIZE = PersistentConfig(
-    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1000"))
+    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1024"))
 )
 
 CHUNK_MIN_SIZE_TARGET = PersistentConfig(
