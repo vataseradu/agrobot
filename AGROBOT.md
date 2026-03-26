@@ -2,7 +2,7 @@
 
 ## Ce este AgroBot?
 
-AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.8.10), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelul **Mistral Large** (mistral-large-2512) prin API-ul Mistral pentru a oferi consultanță agricolă în limba română.
+AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.8.10), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelul **Mistral Large** (`mistral-large-latest`) prin API-ul Mistral pentru a oferi consultanță agricolă în limba română.
 
 ---
 
@@ -39,7 +39,7 @@ AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-we
 | **HTTPS** | Certificat SSL self-signed |
 | **Service** | systemd (`agrobot.service`), auto-start, auto-restart |
 | **Baza de date** | SQLite (`backend/data/webui.db`) |
-| **Model principal** | `mistral-large-2512` via Mistral API |
+| **Model principal** | `mistral-large-latest` via Mistral API |
 | **Ollama** | Instalat nativ (CPU-only), modele: qwen2.5:14b, mistral-nemo:12b, llama3.2:3b |
 | **Repo GitHub** | https://github.com/vataseradu/agrobot |
 
@@ -58,9 +58,9 @@ AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-we
   - Personalizare geografică (întreabă zona pedoclimatică)
   - Context sezonier (sfaturi + termene APIA/AFIR)
   - Disclaimer-uri obligatorii: pesticide, legislație, veterinar
-- **Forțare model** (~linia 2150): Userii non-admin folosesc obligatoriu `mistral-large-2512`
+- **Forțare model** (~linia 2150): Userii non-admin folosesc obligatoriu `mistral-large-latest`
 - **Limită mesaj** (~linia 2157): Max 2000 caractere/mesaj pentru non-admin
-- **Parametri model** (~linia 2275): temperature=0.1, top_p=0.85, max_tokens=2048, frequency_penalty=0.3
+- **Parametri model** (~linia 2275): temperature=0.1, top_p=0.85, max_tokens=8192, frequency_penalty=0.3
 
 #### `backend/open_webui/config.py`
 - **Sugestii chat** (6 prompturi): Culturi, APIA, Tratamente, AFIR tineri fermieri, Zootehnie, Legislație
@@ -98,7 +98,7 @@ Fișierul `/opt/agrobot/.env`:
 ```env
 OLLAMA_BASE_URL=http://localhost:11434
 WEBUI_NAME=AgroBot
-ENABLE_SIGNUP=true
+ENABLE_SIGNUP=false
 WEBUI_AUTH=true
 ENV=prod
 PORT=8080
@@ -115,7 +115,7 @@ ENABLE_OPENAI_API=true
 
 | Funcționalitate | Admin | User normal |
 |---|---|---|
-| Selectare model | ✅ Orice model | ❌ Forțat pe mistral-large-2512 |
+| Selectare model | ✅ Orice model | ❌ Forțat pe mistral-large-latest |
 | Model selector (UI) | ✅ Dropdown complet | ❌ Ascuns, vede „AgroBot 🌾" |
 | Chat controls (temperatura, etc.) | ✅ | ❌ |
 | System prompt custom | ✅ | ❌ |
@@ -138,7 +138,7 @@ Acești parametri sunt aplicați automat la fiecare cerere de chat:
 |---|---|---|
 | `temperature` | 0.1 | Răspunsuri foarte consistente, puțin creative |
 | `top_p` | 0.85 | Restrânge vocabularul la cele mai probabile tokeni |
-| `max_tokens` | 2048 | Limită maximă de răspuns |
+| `max_tokens` | 8192 | Limită maximă de răspuns (~6000 cuvinte) |
 | `frequency_penalty` | 0.3 | Reduce repetiția cuvintelor |
 | `presence_penalty` | 0.0 | Nu penalizează subiecte noi |
 
@@ -193,7 +193,7 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 
 | Variabilă | Default | Descriere |
 |---|---|---|
-| `AGROBOT_FORCED_MODEL` | `mistral-large-2512` | Modelul forțat pentru non-admin |
+| `AGROBOT_FORCED_MODEL` | `mistral-large-latest` | Modelul forțat pentru non-admin |
 | `AGROBOT_MAX_MESSAGE_LENGTH` | `2000` | Limita de caractere per mesaj (non-admin) |
 | `AGROBOT_SYSTEM_PROMPT` | (prompt complet) | Suprascrie system prompt-ul din cod |
 
@@ -249,6 +249,30 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 | Model nu răspunde | Verifică loguri: `journalctl -u agrobot.service -f`. Verifică cheia API în Admin Panel → Connections |
 | Cont blocat pe „pending" | Admin Panel → Users → Aprobă userul |
 | webui.db deteriorat | **NU ȘTERGE!** Conține toți userii și setările. Backup: `cp webui.db webui.db.bak` |
+| „Model not found" pt. non-admin | Verifică că AGROBOT_FORCED_MODEL din .env/cod corespunde cu un model real din Admin Panel → Connections. Modelul trebuie să existe în `request.app.state.MODELS` |
+| Arena Model apare by default | Șterge `arena-model` din `model_order_list` în tabela `config` din SQLite (vezi secțiunea PersistentConfig) |
+
+---
+
+## Notă Importantă: PersistentConfig
+
+Open WebUI folosește un pattern numit **PersistentConfig**: valorile din `.env` sunt citite **o singură dată** la prima pornire și salvate în SQLite (`config` table, coloana `data` ca JSON). După aceea, valorile din DB au prioritate.
+
+**Consecință**: Dacă schimbi `.env` după prima pornire, modificarea NU se aplică automat. Trebuie:
+1. **Varianta A**: Schimbă din **Admin Panel → Settings** (recomandat)
+2. **Varianta B**: Actualizează direct în SQLite cu un script Python:
+```python
+import sqlite3, json
+conn = sqlite3.connect('backend/data/webui.db')
+c = conn.cursor()
+c.execute('SELECT data FROM config WHERE id=1')
+d = json.loads(c.fetchone()[0])
+# exemplu: d['ui']['default_models'] = 'mistral-large-latest'
+c.execute('UPDATE config SET data=? WHERE id=1', (json.dumps(d),))
+conn.commit()
+conn.close()
+```
+Apoi: `systemctl restart agrobot.service`
 
 ---
 
@@ -256,7 +280,19 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 
 | Data | Descriere |
 |---|---|
-| 2026-03-26 | Wallpaper background cu overlay subtil |
-| 2026-03-26 | Configurare completă: system prompt, parametri model, restricții UI, sugestii, forțare model |
+| 2026-03-26 | Deploy inițial pe VPS Hostinger (Ubuntu 22.04, 4 CPU, 16GB RAM) |
+| 2026-03-26 | Configurare Mistral API (`mistral-large-latest`) ca model principal |
+| 2026-03-26 | System prompt complet în română: domenii agricole, instituții, disclaimer-uri |
+| 2026-03-26 | Parametri model: temperature=0.1, top_p=0.85, max_tokens=8192 |
+| 2026-03-26 | Restricții UI pentru non-admin: model selector ascuns, controls dezactivate |
+| 2026-03-26 | Forțare model `mistral-large-latest` pentru non-admin (în `main.py` înainte de validare) |
+| 2026-03-26 | Wallpaper background cu overlay gradient |
+| 2026-03-26 | Welcome page cu categorii: Culturi, APIA/AFIR, Zootehnie, Legislație |
+| 2026-03-26 | Fix: eliminat parametri Ollama-only (top_k, repeat_penalty, seed) incompatibili cu Mistral API |
+| 2026-03-26 | Fix: mutat force-model înainte de validare model în `main.py` |
+| 2026-03-26 | Fix: BYPASS_MODEL_ACCESS_CONTROL=true pentru acces non-admin |
+| 2026-03-26 | Fix: eliminat `arena-model` din `model_order_list`, corectat `default_models` în DB |
+| 2026-03-26 | Fix: schimbat model ID de la `mistral-large-2512` la `mistral-large-latest` (modelul real din sistem) |
+| 2026-03-26 | Signup dezactivat, max_tokens crescut de la 2048 la 8192 |
 | 2026-03-24 | Deploy inițial pe VPS, HTTPS, Nginx, Ollama, Mistral API |
 | 2026-03-24 | Fork Open WebUI, rebranding AgroBot, personalizare română |

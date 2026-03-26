@@ -2269,7 +2269,7 @@ LIMITA DE LUNGIME:
     agrobot_params = {
         "temperature": 0.1,
         "top_p": 0.85,
-        "max_tokens": 2048,
+        "max_tokens": 8192,
         "frequency_penalty": 0.3,
         "presence_penalty": 0.0,
     }
