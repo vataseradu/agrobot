@@ -2681,15 +2681,15 @@
 				<div
 					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/85 dark:from-gray-900 dark:to-gray-900/90 z-0"
 				/>
-			{:else if $settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url ?? null}
+			{:else}
+				{@const bgUrl = $settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url ?? '/assets/wallpaper.jpg'}
 				<div
 					class="absolute top-0 left-0 w-full h-full bg-cover bg-center bg-no-repeat"
-					style="background-image: url({$settings?.backgroundImageUrl ??
-						$config?.license_metadata?.background_image_url})  "
+					style="background-image: url({bgUrl})  "
 				/>
 
 				<div
-					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/85 dark:from-gray-900 dark:to-gray-900/90 z-0"
+					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/80 dark:from-gray-900 dark:to-gray-900/85 z-0"
 				/>
 			{/if}
 
