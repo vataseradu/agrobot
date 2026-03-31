@@ -1695,7 +1695,7 @@ async def chat_completion(
     tasks = form_data.pop("background_tasks", None)
 
     # === AgroBot: Force model for non-admin users (must happen before model validation) ===
-    AGROBOT_FORCED_MODEL = os.environ.get("AGROBOT_FORCED_MODEL", "mistral-large-latest")
+    AGROBOT_FORCED_MODEL = os.environ.get("AGROBOT_FORCED_MODEL", "gpt-4.1-mini")
     if AGROBOT_FORCED_MODEL and user.role != "admin":
         model_id = AGROBOT_FORCED_MODEL
         form_data["model"] = AGROBOT_FORCED_MODEL
