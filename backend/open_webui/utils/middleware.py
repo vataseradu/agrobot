@@ -2255,7 +2255,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     # === AgroBot: Inject model parameters for consistent responses ===
     # Only OpenAI-compatible params (works with Mistral, OpenAI, etc.)
     agrobot_params = {
-        "temperature": 0.1,
+        "temperature": 0.0,
         "top_p": 0.85,
         "max_tokens": 4096,
         "frequency_penalty": 0.3,
