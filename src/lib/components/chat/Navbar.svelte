@@ -113,12 +113,8 @@
 			{$showSidebar ? 'ml-1' : ''}
 			"
 				>
-					{#if showModelSelector && $user?.role === 'admin'}
+					{#if showModelSelector}
 						<ModelSelector bind:selectedModels showSetDefault={!shareEnabled} />
-					{:else if showModelSelector}
-						<div class="text-sm font-medium text-gray-700 dark:text-gray-300 px-2 py-1.5 truncate">
-							AgroBot 🌾
-						</div>
 					{/if}
 				</div>
 
