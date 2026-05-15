@@ -2,7 +2,7 @@
 
 ## Ce este AgroBot?
 
-AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.8.10), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelul **Mistral Large** (`mistral-large-latest`) prin API-ul Mistral pentru a oferi consultanță agricolă în limba română.
+AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.9.5), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelul **Mistral Large** (`mistral-large-latest`) prin API-ul Mistral pentru a oferi consultanță agricolă în limba română.
 
 ---
 
@@ -136,9 +136,9 @@ Acești parametri sunt aplicați automat la fiecare cerere de chat:
 
 | Parametru | Valoare | Scop |
 |---|---|---|
-| `temperature` | 0.1 | Răspunsuri foarte consistente, puțin creative |
+| `temperature` | 0.15 | Răspunsuri consistente, puțin creative |
 | `top_p` | 0.85 | Restrânge vocabularul la cele mai probabile tokeni |
-| `max_tokens` | 8192 | Limită maximă de răspuns (~6000 cuvinte) |
+| `max_tokens` | 4096 | Limită maximă de răspuns (~3000 cuvinte) |
 | `frequency_penalty` | 0.3 | Reduce repetiția cuvintelor |
 | `presence_penalty` | 0.0 | Nu penalizează subiecte noi |
 
@@ -280,6 +280,7 @@ Apoi: `systemctl restart agrobot.service`
 
 | Data | Descriere |
 |---|---|
+| 2026-05-15 | Upgrade Open WebUI **v0.8.10 → v0.9.5** (backend async, calendar/automations/skills, hardening securitate, RAG îmbunătățit). Re-portate: limită mesaj non-admin, injecție system prompt RO, parametri model. 8 migrații DB noi rulează automat la primul start. |
 | 2026-03-26 | Deploy inițial pe VPS Hostinger (Ubuntu 22.04, 4 CPU, 16GB RAM) |
 | 2026-03-26 | Configurare Mistral API (`mistral-large-latest`) ca model principal |
 | 2026-03-26 | System prompt complet în română: domenii agricole, instituții, disclaimer-uri |
