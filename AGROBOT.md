@@ -2,7 +2,12 @@
 
 ## Ce este AgroBot?
 
-AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.9.5), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelul **Mistral Large** (`mistral-large-latest`) prin API-ul Mistral pentru a oferi consultanță agricolă în limba română.
+AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.9.5), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelele **Mistral Large** (`mistral-large-latest`) și **GPT-4.1 mini** (`gpt-4.1-mini`) pentru consultanță agricolă în limba română.
+
+## Cazuri de Utilizare (target)
+
+1. **Fermier căutând finanțare** — întrebări despre PNDR, AFIR, APIA, GAL, condiții de eligibilitate, sume, termene. **Necesită precizie maximă** — răspuns greșit poate face fermierul să piardă un dosar. Răspunde pe baza de Knowledge AFIR.
+2. **FAQ rapid pentru fermieri** — întrebări generale despre culturi, tratamente, zootehnie, legislație. Răspuns rapid, conversațional, fără sursă obligatorie.
 
 ---
 
@@ -115,8 +120,8 @@ ENABLE_OPENAI_API=true
 
 | Funcționalitate | Admin | User normal |
 |---|---|---|
-| Selectare model | ✅ Orice model | ❌ Forțat pe mistral-large-latest |
-| Model selector (UI) | ✅ Dropdown complet | ❌ Ascuns, vede „AgroBot 🌾" |
+| Selectare model | ✅ Orice model | ✅ Poate alege între modelele expuse (gpt-4.1-mini / mistral-large-latest) |
+| Model selector (UI) | ✅ Dropdown complet | ✅ Dropdown vizibil (gate eliminat în mai 2026) |
 | Chat controls (temperatura, etc.) | ✅ | ❌ |
 | System prompt custom | ✅ | ❌ |
 | Parametri model custom | ✅ | ❌ |
@@ -164,19 +169,79 @@ journalctl -u agrobot.service -f --no-pager
 ### Rebuild frontend (după modificări Svelte)
 ```bash
 cd /opt/agrobot
-git pull origin main
+git pull
+rm -rf build/
 nohup npm run build > /tmp/agrobot-build.log 2>&1 &
-# Așteaptă ~2-3 minute, verifică:
-tail -f /tmp/agrobot-build.log
-# Când vezi "✔ done":
+# Aștept până termină procesul:
+while pgrep -f "npm run build" > /dev/null; do sleep 30; done
+# Verifică succes:
+tail -5 /tmp/agrobot-build.log
+ls -lh build/index.html   # timestamp de azi = OK
 systemctl restart agrobot.service
 ```
 
 ### Actualizare doar backend (fără rebuild)
 ```bash
 cd /opt/agrobot
-git pull origin main
+git pull
 systemctl restart agrobot.service
+```
+
+### Upgrade major Open WebUI (procedura validată mai 2026)
+
+Pașii pentru upgrade de versiune (ex. 0.8.x → 0.9.x). **Tot lucrul de merge se face local pe Windows**, pe VPS doar pull + build + restart.
+
+**Pe Windows (local):**
+```bash
+cd "c:\Users\Vatase Radu\Desktop\GUMAORI"
+git remote add upstream https://github.com/open-webui/open-webui.git  # o singură dată
+git fetch upstream --tags
+git checkout -b upgrade-vX.Y.Z
+git merge vX.Y.Z   # va da conflicte pe middleware.py + config.py
+# Rezolvă conflicte manual, păstrând personalizările AgroBot
+git add . && git commit -m "Merge upstream vX.Y.Z"
+git push -u origin upgrade-vX.Y.Z
+```
+
+**Pe VPS — BACKUP OBLIGATORIU întâi:**
+```bash
+cd /opt/agrobot
+cp backend/data/webui.db backend/data/webui.db.bak-$(date +%Y%m%d-%H%M%S)
+cp .env .env.bak-$(date +%Y%m%d-%H%M%S)
+
+# Verifică NU ai modificări locale necommitate (Navbar, package-lock etc.)
+git status
+# Dacă da: investighează (poate fi editare deliberată) și commit/push local înainte
+
+git fetch origin
+git checkout upgrade-vX.Y.Z
+git pull
+
+# Reinstall Python deps (pot fi schimbări mari între versiuni)
+source venv/bin/activate
+pip install -r backend/requirements.txt --upgrade
+
+# Reinstall + rebuild frontend
+npm install --legacy-peer-deps
+rm -rf build/
+nohup npm run build > /tmp/agrobot-build.log 2>&1 &
+while pgrep -f "npm run build" > /dev/null; do sleep 30; done
+tail -5 /tmp/agrobot-build.log
+ls -lh build/index.html   # timestamp de azi = OK
+
+# Restart (migrațiile DB rulează aici la primul start)
+systemctl restart agrobot.service
+journalctl -u agrobot.service -f --no-pager
+# Caută în log: "Running upgrade XXX -> YYY", "Application startup complete", banner versiune nouă
+```
+
+**Rollback rapid dacă ceva nu merge:**
+```bash
+systemctl stop agrobot.service
+cd /opt/agrobot
+git checkout main
+cp backend/data/webui.db.bak-XXX backend/data/webui.db
+systemctl start agrobot.service
 ```
 
 ### Nginx
@@ -193,9 +258,10 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 
 | Variabilă | Default | Descriere |
 |---|---|---|
-| `AGROBOT_FORCED_MODEL` | `mistral-large-latest` | Modelul forțat pentru non-admin |
 | `AGROBOT_MAX_MESSAGE_LENGTH` | `2000` | Limita de caractere per mesaj (non-admin) |
 | `AGROBOT_SYSTEM_PROMPT` | (prompt complet) | Suprascrie system prompt-ul din cod |
+
+> **Notă**: `AGROBOT_FORCED_MODEL` a fost eliminat în mai 2026 — userii pot alege liber între modelele expuse de admin.
 
 ---
 
@@ -245,12 +311,14 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 |---|---|
 | Modificări .env nu au efect | Open WebUI cache-uiește în SQLite. Schimbă din Admin Panel → Settings |
 | Build frontend eșuează | Rulează `npm install --legacy-peer-deps` apoi `npm run build` |
+| Build frontend cade pe `@internationalized/date` | Bug upstream: `bits-ui ^2.x` cere peer dep dar nu o declară. E adăugată explicit în `package.json` din mai 2026. Dacă reapare pe alt pachet: `npm install <pachet> --legacy-peer-deps` apoi pune în package.json. |
 | Frontend nu se încarcă (index.html lipsește) | NU seta `STATIC_DIR` în .env, lasă doar `FRONTEND_BUILD_DIR` |
 | Model nu răspunde | Verifică loguri: `journalctl -u agrobot.service -f`. Verifică cheia API în Admin Panel → Connections |
 | Cont blocat pe „pending" | Admin Panel → Users → Aprobă userul |
 | webui.db deteriorat | **NU ȘTERGE!** Conține toți userii și setările. Backup: `cp webui.db webui.db.bak` |
-| „Model not found" pt. non-admin | Verifică că AGROBOT_FORCED_MODEL din .env/cod corespunde cu un model real din Admin Panel → Connections. Modelul trebuie să existe în `request.app.state.MODELS` |
 | Arena Model apare by default | Șterge `arena-model` din `model_order_list` în tabela `config` din SQLite (vezi secțiunea PersistentConfig) |
+| Banner-ul zice versiunea veche după upgrade | Nu ai făcut `git checkout upgrade-vX.Y.Z` pe VPS. Verifică `git branch --show-current`. |
+| `git checkout upgrade-vX.Y.Z` zice „local changes would be overwritten" | Verifică `git diff <fișier>` pe fiecare fișier modificat. Dacă e editare deliberată (ex. Navbar modificat direct pe VPS), commit-o local sau salvează patch. Apoi `git checkout -- <fișier>` ca să discard, după care checkout pe noul branch. |
 
 ---
 
@@ -276,11 +344,54 @@ Apoi: `systemctl restart agrobot.service`
 
 ---
 
+## Roadmap Producție
+
+Plan deschis pentru sesiuni viitoare. **Status: în lucru.**
+
+### Prioritate 1 — Knowledge Base AFIR (anti-halucinație)
+- [ ] Creează colecție „AFIR" în Admin Panel → Workspace → Knowledge
+- [ ] **Switch embeddings la OpenAI `text-embedding-3-small`** (Admin → Settings → Documents)
+  - Motiv: Ollama embeddings pe CPU = 20-30 min pentru ~50 PDF-uri. OpenAI = instant, ~$0.02/M tokens (sub $1 pentru toată colecția).
+- [ ] Upload PDF-uri AFIR din Google Drive (sursa: user are colecția deja organizată)
+- [ ] Setări RAG optimizate pentru documente AFIR dense:
+  - `CHUNK_SIZE` = 1500 (de la 1024)
+  - `CHUNK_OVERLAP` = 200
+  - `RAG_TOP_K` = 8 (de la 5)
+  - **Activează reranker**: `bge-reranker-v2-m3` (disponibil în 0.9.x)
+  - **Activează hybrid search** (BM25 + semantic) — Admin → Settings → Documents
+- [ ] Attach colecția la modelul „AgroBot Finanțări" (vezi mai jos)
+
+### Prioritate 2 — Două modele virtuale (FAQ vs Finanțări)
+Configurare în Admin Panel → Workspace → Models → Create:
+
+| Model virtual | Bază | Prompt | RAG | Citare sursă | Use case |
+|---|---|---|---|---|---|
+| **AgroBot FAQ** | `gpt-4.1-mini` | Cald, conversațional, completare cu cunoștințe generale OK | Opțional | Nu | Întrebări generale: culturi, tratamente, zootehnie, legislație |
+| **AgroBot Finanțări** | `mistral-large-latest` | Strict: „dacă nu e în documente, spune că nu știi" | Forțat pe colecția AFIR | **DA** (numele PDF + secțiunea) | Finanțări PNDR/AFIR/APIA/GAL |
+
+### Prioritate 3 — Evaluare model Claude Haiku 4.5
+- [ ] Adaugă API key Anthropic în Admin → Connections
+- [ ] Testează pe ~10 întrebări reale fermieri (mix FAQ + finanțări)
+- [ ] Compară cu Mistral Large pe: precizie, română, viteză, cost
+- [ ] Decide dacă merge ca default sau rămâne backup
+
+### Prioritate 4 — Hardening producție
+- [ ] HTTPS cu certificat real (Let's Encrypt) — în loc de self-signed
+- [ ] Rate limiting per user (nu doar limită caractere) — config Nginx sau middleware
+- [ ] Backup automat zilnic webui.db (cron + scp/rsync off-site)
+- [ ] Monitoring: log retention, alertă disk space, alertă crash service
+- [ ] Migrare DB de la SQLite la Postgres (când > 100 useri activi)
+
+---
+
 ## Istoric Modificări
 
 | Data | Descriere |
 |---|---|
-| 2026-05-15 | Upgrade Open WebUI **v0.8.10 → v0.9.5** (backend async, calendar/automations/skills, hardening securitate, RAG îmbunătățit). Re-portate: limită mesaj non-admin, injecție system prompt RO, parametri model. 8 migrații DB noi rulează automat la primul start. |
+| 2026-05-15 | Definite 2 cazuri de utilizare: fermier finanțări + FAQ rapid. Documentat roadmap producție (Knowledge AFIR, 2 modele virtuale, embeddings OpenAI, hardening). |
+| 2026-05-15 | Fix: `bits-ui ^2.0.0` cere peer dep `@internationalized/date ^3.8.1` — adăugat explicit în `package.json` (upstream uită s-o declare). |
+| 2026-05-15 | Sync `Navbar.svelte`: eliminat gate `$user?.role === 'admin'` pe model selector — userii pot alege liber între modele (consistent cu commit `9a9828b` care a eliminat forțarea modelului). Editarea fusese făcută direct pe VPS în trecut, acum în git. |
+| 2026-05-15 | Upgrade Open WebUI **v0.8.10 → v0.9.5** (backend async cu psycopg v3, Calendar/Automations/Skills/Channels, RAG hybrid + reranking, `{{USER_GROUPS}}` în prompts, SSRF redirect blocking, iframe CSP). Re-portate: limită mesaj non-admin, injecție system prompt RO (cu `await apply_system_prompt_to_body` — funcția e async din 0.9.0), parametri model. 8 migrații DB noi rulează automat la primul start. Branch `upgrade-v0.9.5` păstrat în git pentru referință. |
 | 2026-03-26 | Deploy inițial pe VPS Hostinger (Ubuntu 22.04, 4 CPU, 16GB RAM) |
 | 2026-03-26 | Configurare Mistral API (`mistral-large-latest`) ca model principal |
 | 2026-03-26 | System prompt complet în română: domenii agricole, instituții, disclaimer-uri |
