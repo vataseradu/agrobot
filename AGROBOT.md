@@ -11,6 +11,157 @@ AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-we
 
 ---
 
+## Justificare Decizii Tehnologice (pentru finanțatori/profesori)
+
+### De ce Open WebUI (vs alte alternative)?
+
+| Alternativă evaluată | De ce NU |
+|---|---|
+| **LibreChat, LlamaIndex Chat UI** | Mai puțin matur; lipsesc feature-uri esențiale (RBAC, knowledge collections native) |
+| **AnythingLLM** | Bun, dar mai puțin granular pentru permisiuni multi-utilizator |
+| **Build custom (FastAPI + Svelte)** | Estimativ 3-6 luni dezvoltare. Costul re-implementării feature-urilor (RBAC, chat history, RAG pipeline) nu se justifică pentru un MVP |
+| **Open WebUI** ✅ | Open-source mature (~150k★), ecosystem activ, suport nativ pentru Romanian, RAG pipeline cu hybrid search + reranking, integrare facilă API LLM (OpenAI/Mistral/Anthropic/Ollama) |
+
+**Concluzie:** Open WebUI permite focus pe **personalizare agricolă** (system prompt RO, AFIR knowledge, modele virtuale specifice) în loc de re-implementare infrastructură.
+
+### De ce Mistral Large + GPT-4.1-mini (dual provider)?
+
+| Model | Cost (per 1M tokens) | Calitate RO | Use Case |
+|---|---|---|---|
+| Mistral Large | €6 in / €18 out | **Excelentă** (model european) | Use case Finanțări — precizie critică pe AFIR/APIA |
+| GPT-4.1-mini | $0.40 in / $1.60 out | Foarte bună | Use case FAQ — răspuns rapid, cost redus |
+| Claude Haiku 4.5 | $0.80 in / $4 out | Excelentă | În roadmap pentru evaluare |
+| Llama 3.1 70B (self-hosted) | Free (HW cost) | Bună | **Nu fezabil**: cere GPU 24GB+ |
+
+**Trade-off:** **Cloud API vs self-hosted** — pentru ~100-500 query-uri/zi, cost cloud ~$5-20/lună, dar zero infrastructură de mentenanță. Self-hosted ar cere GPU server $200+/lună.
+
+### De ce Docling (vs alte OCR/extractoare)?
+
+| Alternativă | Pro | Con |
+|---|---|---|
+| PyMuPDF (default Open WebUI) | Free, rapid | Eșec total pe PDF-uri scanate; cid: codes pe fonturi custom |
+| Apache Tika | Free, stabil | Calitate slabă pe tabele; necesită Java |
+| Mistral Document AI (cloud) | Top quality, scalabil | Cost $0.005/pagină = $50/10K pagini |
+| AWS Textract / Google DocAI | Top quality | Cost similar, lock-in cloud provider |
+| **Docling self-hosted** ✅ | Free, control total, suport OCR (Tesseract/RapidOCR), generează markdown structurat | CPU-only e lent (~1-3 min/PDF), instabil la load (OOM) |
+
+**Decizie:** Docling local pentru MVP (cost zero, control total), cu plan migrare la Mistral DocAI când volumul crește >1000 PDF/lună.
+
+### De ce OpenAI `text-embedding-3-large` (vs alternative)?
+
+| Model embedding | Cost | Dim | Calitate RO |
+|---|---|---|---|
+| OpenAI 3-small | $0.02/M | 1536 | Bună |
+| **OpenAI 3-large** ✅ | $0.13/M | 3072 | **Excelentă** |
+| Cohere multilingual | $0.10/M | 1024 | Bună |
+| Ollama nomic-embed | Free | 768 | Slabă pe RO + lent pe CPU (~5-15 min/lot) |
+
+**Decizie:** 3-large — diferența de cost pentru lotul AFIR (~$0.20 vs $1.30) e nesemnificativă față de îmbunătățirea în precizie retrieval. Pe limbi „minoritare" ca română, modelele mari prind nuanțe semantice ce micile pierd.
+
+---
+
+## Probleme Întâmpinate & Soluții Aplicate
+
+Cronologia provocărilor reale din implementare. Util pentru a documenta complexitatea proiectului.
+
+### Problema 1: Bug Hybrid Search în Open WebUI 0.9.5
+
+**Simptom:** RAG returnează `[[]]` empty silent, model halucinează liber chiar cu knowledge atașată.
+
+**Cauză identificată:** `EnsembleRetriever` (LangChain) cu BM25 + Vector eșuează silent în 0.9.5 când le combină via RRF. Bug upstream.
+
+**Workaround aplicat:** Dezactivat Hybrid Search. Vector-only retrieval cu OpenAI 3-large e suficient pentru română (~90% precizie). BM25 ar fi adus +5-10% pe termeni exacți („submăsura 4.1.a") dar nu blocant.
+
+**Estimare cost dezvoltare patch:** ~1 zi (înlocuire EnsembleRetriever cu RRF manual). Postponat pentru post-MVP.
+
+### Problema 2: PDF-uri scanate AFIR returnează „empty content"
+
+**Simptom:** ~70% din PDF-uri AFIR (ordine, ghiduri scanate) eșuează la extracție Docling cu „The content provided is empty".
+
+**Cauză identificată:** Default Docling cu RapidOCR nu declanșează OCR pe PDF-uri care au „text layer" gol/corupt (typical pentru scanuri vechi). Plus RapidOCR are acuratețe slabă pe diacritice românești.
+
+**Soluție aplicată:** Configurat Docling cu:
+```json
+{
+  "force_full_page_ocr": "true",
+  "ocr_engine": "tesseract", 
+  "ocr_lang": "ron,eng"
+}
+```
+Tesseract cu pack-ul `ron` e standard industrie pentru documente RO. Forțarea OCR pe TOATE paginile garantează text extras chiar pe PDF-uri cu text layer prost.
+
+**Trade-off:** Timp procesare crește de 5-10x (de la ~30 sec la ~3-5 min/PDF), dar acuratețea trece de la 30% la 95%+.
+
+### Problema 3: Docling OOM la upload paralel
+
+**Simptom:** La 3+ PDF-uri uploadate simultan, Docling killed by OOM, downstream Open WebUI primește 503.
+
+**Cauză identificată:** Fiecare worker Docling consumă ~3-4GB RAM (modele OCR + buffer-uri imagine + tablebones). 3 workers × 4GB = 12GB → MemoryMax atins → kernel kill.
+
+**Constrânt:** VPS Hostinger 16GB RAM total, din care Open WebUI consumă ~1-2GB, OS ~1GB, Ollama ~1GB. Rămân ~11-12GB pentru Docling.
+
+**Soluție aplicată:** Limitat la 2 workers paraleli (`DOCLING_SERVE_ENG_LOC_NUM_WORKERS=2`), `MemoryMax=12G` în systemd. Auto-restart pe failure.
+
+**Limitare reziduală:** Throughput maximum ~2 PDF/3min = 40 PDF/oră. Adecvat pentru ~1000 PDF dar nu pentru 10000+.
+
+### Problema 4: Bulk upload script eșuează la Docling instability
+
+**Tentativă:** Script bash sequential `bulk-upload-afir.sh` pentru a procesa 50+ PDF-uri automat.
+
+**Rezultat:** După primele 1-3 PDF-uri OK, Docling crashează (OOM). După restart, primește requesturi prea repede → returnează empty → restul de 47 eșuează în cascade.
+
+**Tentativă 2:** Open WebUI Sync Directory feature.
+
+**Rezultat:** Funcționează pentru ~1 fișier/5min, dar fișierele mari (>2MB) eșuează la add-to-knowledge cu timeout. ~50% din fișiere ajung în knowledge, restul devin orfani.
+
+**Decizie pragmatică:** Upload manual prin UI, 2 PDF-uri la odată, cu pauză pentru stabilizare Docling. Acceptabil pentru lotul curent (~50 PDF, ~2h), nu scalabil la 1000+.
+
+### Problema 5: Knowledge cleanup nu cascade-deletes
+
+**Simptom:** Ștergere colecție knowledge în UI → file table, knowledge_file, vector_db rămân cu orfani. Acumulate ~150 fișiere orfane pe disk din experimente.
+
+**Cauză:** Bug Open WebUI 0.9.5 — delete colecție nu propagă la dependents.
+
+**Soluție:** Procedură SQL + filesystem cleanup documentată (vezi secțiunea „Cleanup Knowledge complet"). Necesită rulare manuală periodică.
+
+---
+
+## Limitări Cunoscute & Plan de Scalare
+
+### Limitări curente (MVP)
+
+| Aspect | Limită actuală | Comportament la depășire |
+|---|---|---|
+| Throughput upload PDF | ~2 PDF/3min (cu OCR forțat) | Sub această rată, Docling stabil |
+| Concurrency Docling | 2 workers paraleli | 3+ workers → OOM kill |
+| Volum total knowledge | ~1000 PDF realistic | Peste, retrieval devine lent (Chroma single-node) |
+| Rate Mistral API | Plan basic ~10 req/min | Hit rate limit, user vede „rate limit exceeded" |
+| Concurrent users | Estimativ ~10-20 simultan | Limită CPU pe Open WebUI (uvicorn single worker) |
+
+### Roadmap scalare (Fazele 2-3 post-MVP)
+
+**Faza 2 — Optimizare self-hosted** (when volum > 500 PDF/lună):
+- Upgrade VPS la 8 CPU / 32 GB RAM (~$50/lună) → 4 workers Docling = 2x throughput
+- Switch Mistral plan basic → Mistral Pro (~€20/lună) = 10x rate limit
+- Cache embeddings în Redis (acum în RAM, se pierd la restart)
+- Monitoring: Prometheus + Grafana pentru visibility
+
+**Faza 3 — Cloud-native** (when volum > 5000 PDF):
+- Migrare OCR la **Mistral Document AI** ($0.005/pag) sau **Azure DocIntel**
+- Vector DB managed (Pinecone / Weaviate Cloud) pentru >100k chunks
+- Multi-worker Open WebUI cu Kubernetes / nginx upstream
+- CDN pentru frontend, Postgres în loc de SQLite
+
+**Estimare cost producție la diferite scale:**
+
+| Scale | Volume | Setup | Cost lunar |
+|---|---|---|---|
+| MVP (acum) | <500 PDF, <50 useri | VPS 4CPU 16GB + cloud LLM | **~$30-50** |
+| Faza 2 | <5K PDF, <200 useri | VPS 8CPU 32GB + Mistral Pro + Redis | ~$120-200 |
+| Faza 3 | >5K PDF, >500 useri | Kubernetes + cloud OCR + managed DB | ~$400-800 |
+
+---
+
 ## Arhitectură
 
 ```
