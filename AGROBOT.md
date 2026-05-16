@@ -319,6 +319,12 @@ Se pot seta în `.env` sau ca variabile de mediu systemd:
 | Arena Model apare by default | Șterge `arena-model` din `model_order_list` în tabela `config` din SQLite (vezi secțiunea PersistentConfig) |
 | Banner-ul zice versiunea veche după upgrade | Nu ai făcut `git checkout upgrade-vX.Y.Z` pe VPS. Verifică `git branch --show-current`. |
 | `git checkout upgrade-vX.Y.Z` zice „local changes would be overwritten" | Verifică `git diff <fișier>` pe fiecare fișier modificat. Dacă e editare deliberată (ex. Navbar modificat direct pe VPS), commit-o local sau salvează patch. Apoi `git checkout -- <fișier>` ca să discard, după care checkout pe noul branch. |
+| RAG returnează `[[]] [[]]` (retrieval empty), model halucinează | **Bug în Open WebUI 0.9.5 hybrid search.** EnsembleRetriever cu BM25+vector returnează empty silent. **Fix: dezactivează Hybrid Search** (Settings → Documents → Hybrid Search OFF). Vector-only retrieval cu OpenAI 3-large e suficient ca precizie. Documentat în secțiunea „Bug Hybrid Search 0.9.5" mai jos. |
+| Knowledge attached dar răspuns halucinează | 1) Chat vechi cu referințe stale → folosește „+ New Chat". 2) Embeddings dim mismatch (uploaded cu un model, query cu altul) → șterge fișiere, reupload după ce embedding model e setat. 3) Hybrid search bug → dezactivează. |
+| Docling OOM-killed la upload paralel | Crește `MemoryMax` în `/etc/systemd/system/docling.service` (de la 6G la 10G). Upload max 1-3 PDF-uri odată, nu lotul întreg. |
+| OOM după multiple uploads | Service-ul Docling: `systemctl restart docling.service`. Folosește `MemoryMax=10G` și upload în batch-uri. |
+| Open WebUI delete knowledge collection nu cascade-deletes vectori/files | Bug cunoscut. Curățenie manuală: `DELETE FROM file WHERE id NOT IN (SELECT file_id FROM chat_file...);` + `rm -rf /opt/agrobot/backend/data/vector_db/*`. Vezi secțiunea „Cleanup knowledge complet" mai jos. |
+| `Failed to fetch collection file-XXX` în logs | Referință stale după delete. Identifică sursa cu `grep` în tabelele file/knowledge/model.meta/chat.chat/user.settings, apoi curăță. |
 
 ---
 
@@ -348,18 +354,34 @@ Apoi: `systemctl restart agrobot.service`
 
 Plan deschis pentru sesiuni viitoare. **Status: în lucru.**
 
-### Prioritate 1 — Knowledge Base AFIR (anti-halucinație)
-- [ ] Creează colecție „AFIR" în Admin Panel → Workspace → Knowledge
-- [ ] **Switch embeddings la OpenAI `text-embedding-3-small`** (Admin → Settings → Documents)
-  - Motiv: Ollama embeddings pe CPU = 20-30 min pentru ~50 PDF-uri. OpenAI = instant, ~$0.02/M tokens (sub $1 pentru toată colecția).
-- [ ] Upload PDF-uri AFIR din Google Drive (sursa: user are colecția deja organizată)
-- [ ] Setări RAG optimizate pentru documente AFIR dense:
-  - `CHUNK_SIZE` = 1500 (de la 1024)
-  - `CHUNK_OVERLAP` = 200
-  - `RAG_TOP_K` = 8 (de la 5)
-  - **Activează reranker**: `bge-reranker-v2-m3` (disponibil în 0.9.x)
-  - **Activează hybrid search** (BM25 + semantic) — Admin → Settings → Documents
+### Prioritate 1 — Knowledge Base AFIR (anti-halucinație) ✅ FUNCȚIONAL
+
+**Stack tehnic configurat (mai 2026):**
+- [x] **Docling-serve ca serviciu HTTP separat** la `http://127.0.0.1:5001` (systemd: `docling.service`)
+  - Instalat în `/opt/docling` cu venv, pip install `docling-serve[cpu]`
+  - Dependențe sistem: `apt install libgl1 libglib2.0-0 tesseract-ocr tesseract-ocr-ron`
+  - `MemoryMax=10G` în systemd unit (de la 6G default — OOM-killed la upload paralel)
+- [x] **OpenAI embeddings: `text-embedding-3-large`** (3072 dim)
+  - Admin → Settings → Documents → Embedding Engine: OpenAI
+  - Cost real: ~$0.02-$0.20 pentru lotul AFIR (~100 PDF-uri)
+- [x] **Content Extractor: Docling** cu OCR auto (RapidOCR)
+  - Setting: Content Extraction Engine = Docling, URL = `http://127.0.0.1:5001`
+- [x] **Setări RAG**:
+  - Text Splitter: **Token (Tiktoken)** ⭐
+  - Markdown Header Text Splitter: **ON** (Docling produce markdown structurat)
+  - Chunk Size: 1500, Chunk Overlap: 250
+  - Top K: 8, Top K Reranker: 3
+  - Relevance Threshold: **0** (cu 0.15-0.2 filtra prea agresiv pe RO)
+  - **Hybrid Search: OFF** ⚠️ (bug 0.9.5 — vezi mai jos)
+  - Reranker: dezactivat momentan (lent pe CPU)
+- [x] **RAG Template custom** (strict, cu surse obligatorii — vezi secțiunea „RAG Template" mai jos)
+- [x] **Test E2E reușit**: query „Ce modifică Hotărârea 81/2026?" pe `hg-81-2026.pdf` → răspuns precis cu page citations
+
+**De făcut:**
+- [ ] Upload restul ~96 PDF-urilor AFIR (în batch-uri de 2-3, ~1-2 min/PDF)
+- [ ] Test query pe 5-10 PDF-uri random după upload (anti-halucinație)
 - [ ] Attach colecția la modelul „AgroBot Finanțări" (vezi mai jos)
+- [ ] **Patch sau așteptăm fix upstream pentru Hybrid Search bug** (vector-only e suficient deocamdată)
 
 ### Prioritate 2 — Două modele virtuale (FAQ vs Finanțări)
 Configurare în Admin Panel → Workspace → Models → Create:
@@ -384,11 +406,180 @@ Configurare în Admin Panel → Workspace → Models → Create:
 
 ---
 
+## Bug Hybrid Search 0.9.5 (CRITICAL)
+
+**Simptom:** Cu Hybrid Search ON, `query_doc_with_hybrid_search` returnează `result [[]] [[]]` chiar dacă chunks-urile există în Chroma cu embeddings corecte.
+
+**Cauză:** `EnsembleRetriever` (LangChain) cu BM25 + Vector pică silent în 0.9.5 — combinația returnează listă goală. Probabil bug în interacțiunea BM25Retriever + RRF.
+
+**Fix temporar:** Dezactivează Hybrid Search.
+- Admin Panel → Settings → Documents → **Hybrid Search: OFF**
+- SAU direct DB: `UPDATE config SET data = json_set(data, '$.rag.enable_hybrid_search', json('false'));`
+
+**Impact:** Vector search OpenAI 3-large e suficient pentru RO. BM25 ar fi îmbunătățit pe termeni exacți (gen „submăsura 4.1.a") dar nu blocant.
+
+**Fix definitiv (viitor):** patch în `backend/open_webui/retrieval/utils.py` linia ~395 — înlocuim EnsembleRetriever cu RRF manual. Sau așteptăm fix upstream în 0.9.6+.
+
+---
+
+## RAG Template (strict, cu surse — pentru finanțări)
+
+Configurat în Admin Panel → Settings → Documents → RAG Template:
+
+```
+Ești AgroAsistent — răspunzi fermierilor români pe baza documentelor agricole oficiale primite mai jos.
+
+REGULI:
+
+1. Sursă obligatorie: răspunzi DOAR pe baza fragmentelor din <context>. Nu adăuga informații din cunoștințele tale generale despre AFIR, APIA, PNDR.
+
+2. Când răspunsul E în context: prezintă-l complet — sume, termene, condiții, articole de lege, procente, coduri de submăsuri.
+
+3. Când răspunsul NU E în context: spune EXACT „Nu am această informație în documentele oficiale pe care le am la dispoziție. Cel mai bine verifici direct pe afir.ro sau apia.org.ro." Atât. NU completa cu cunoștințe generale.
+
+4. NU inventa niciodată: sume exacte, termene-limită, numere de articole, procente sau coduri pe care nu le vezi explicit în <context>.
+
+5. Citează sursa la final: după răspuns, adaugă „📄 Surse:" cu documentele + pagina.
+
+6. Limba: română, ton clar, prietenos dar profesional. tu/ție, nu dumneavoastră.
+
+7. Format: bullet-uri, liste numerotate, tabele. Maximum 400-500 cuvinte pentru întrebări complexe.
+
+<context>
+{{CONTEXT}}
+</context>
+
+Întrebare: {{QUERY}}
+```
+
+---
+
+## Setup Docling-serve (PDF extractor)
+
+Open WebUI 0.9.5 cere Docling ca serviciu HTTP separat (NU librărie Python integrată). Default URL `http://docling:5001` e pentru Docker compose; pe instalare nativă trebuie pornit standalone.
+
+### Install one-time
+
+```bash
+# 1. Dependențe sistem
+apt install -y libgl1 libglib2.0-0 tesseract-ocr tesseract-ocr-ron
+
+# 2. Folder + venv
+mkdir -p /opt/docling
+cd /opt/docling
+python3.11 -m venv venv
+source venv/bin/activate
+pip install "docling-serve[cpu]"  # ~2GB deps (torch + transformers)
+
+# 3. Systemd service
+cat > /etc/systemd/system/docling.service <<'EOF'
+[Unit]
+Description=Docling-Serve PDF Extraction Service for AgroBot
+After=network.target
+Before=agrobot.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/docling
+
+# Async-friendly + paralel processing (3 PDF-uri simultan)
+Environment="DOCLING_SERVE_MAX_SYNC_WAIT=900"
+Environment="DOCLING_SERVE_ENG_LOC_NUM_WORKERS=3"
+Environment="DOCLING_SERVE_MAX_NUM_TASKS=5"
+Environment="DOCLING_SERVE_TASKS_PER_USER_LIMIT=10"
+
+ExecStart=/usr/local/bin/docling-serve run --host 127.0.0.1 --port 5001
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 12G pentru 3 workers + modele OCR; default 6G = OOM la upload paralel
+MemoryMax=12G
+CPUQuota=350%
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now docling.service
+sleep 60  # warm-up modele
+curl http://127.0.0.1:5001/health  # {"status":"ok"}
+```
+
+### Configurare în Open WebUI
+
+Admin Panel → Settings → Documents → Content Extraction:
+- Engine: **Docling**
+- URL: `http://127.0.0.1:5001`
+- (Docling API Key gol)
+
+### Limitări observate
+
+- **CPU only**: ~1-2 min/PDF cu OCR (RapidOCR + Tesseract pentru română)
+- **Gateway Timeout pe fișiere mari** (>120s default) → setat `DOCLING_SERVE_MAX_SYNC_WAIT=900` (15 min)
+- **OOM kill la upload paralel**: a fost necesar `MemoryMax=12G` (default 6G OOM, 10G OOM cu workers paralel)
+- **Workers paralel**: `DOCLING_SERVE_ENG_LOC_NUM_WORKERS=3` permite 3 PDF-uri simultan; mai mult = OOM
+- **Recomandare upload**: batch-uri de 3-5 PDF-uri (queue absoarbe), max 3 procesate concurent
+
+### Tuning env vars
+
+| Variable | Valoare | Scop |
+|---|---|---|
+| `DOCLING_SERVE_MAX_SYNC_WAIT` | 900 | Timeout sync (15 min pentru PDF-uri mari/scanate) |
+| `DOCLING_SERVE_ENG_LOC_NUM_WORKERS` | 3 | Workers paraleli pentru conversie |
+| `DOCLING_SERVE_MAX_NUM_TASKS` | 5 | Coadă tasks (acceptă cereri când workers sunt ocupați) |
+| `DOCLING_SERVE_TASKS_PER_USER_LIMIT` | 10 | Limită rate-limit per user |
+
+---
+
+## Cleanup Knowledge complet (pentru reset)
+
+Open WebUI 0.9.5 NU cascade-deletes când ștergi o knowledge collection — rămân orfani în `file`, vector_db, etc. Procedură reset complet:
+
+```bash
+# 1. Backup
+systemctl stop agrobot.service
+cp /opt/agrobot/backend/data/webui.db /opt/agrobot/backend/data/webui.db.bak-$(date +%Y%m%d-%H%M)
+
+# 2. Curățenie SQL
+sqlite3 /opt/agrobot/backend/data/webui.db <<'EOF'
+DELETE FROM knowledge_file;
+DELETE FROM knowledge;
+DELETE FROM document;
+DELETE FROM file 
+  WHERE id NOT IN (SELECT file_id FROM chat_file WHERE file_id IS NOT NULL)
+  AND id NOT IN (SELECT file_id FROM channel_file WHERE file_id IS NOT NULL);
+EOF
+
+# 3. Nuke vector DB (Chroma se recreează la pornire)
+rm -rf /opt/agrobot/backend/data/vector_db/*
+
+# 4. Curățenie fizică
+rm -f /opt/agrobot/backend/data/uploads/*.pdf
+rm -f /opt/agrobot/backend/data/uploads/*.md
+rm -f /opt/agrobot/backend/data/uploads/*.txt
+
+# 5. Restart
+systemctl start agrobot.service
+```
+
+---
+
 ## Istoric Modificări
 
 | Data | Descriere |
 |---|---|
-| 2026-05-15 | Definite 2 cazuri de utilizare: fermier finanțări + FAQ rapid. Documentat roadmap producție (Knowledge AFIR, 2 modele virtuale, embeddings OpenAI, hardening). |
+| 2026-05-15 (târziu) | **Pipeline RAG complet funcțional** end-to-end. Stack final: Docling (`http://127.0.0.1:5001`) + OpenAI `text-embedding-3-large` + Chroma vector store + custom RAG template strict. Test E2E OK: query pe `hg-81-2026.pdf` → răspuns precis cu page citations. Setări RAG: chunk 1500/overlap 250, Token splitter, Markdown header splitter ON, threshold 0, Hybrid OFF (bug 0.9.5). |
+| 2026-05-15 (târziu) | **Bug identificat:** Hybrid Search în Open WebUI 0.9.5 returnează `[[]]` empty silent → model halucinează. Cauză: `EnsembleRetriever` cu BM25 fail silent. Workaround: Hybrid OFF, vector-only retrieval. Documentat în secțiunea „Bug Hybrid Search". |
+| 2026-05-15 (târziu) | **Bug identificat:** Open WebUI delete colecție în UI NU cascade-deletes orfani în `file`/`vector_db`. Stale file IDs causează „Failed to fetch collection" errors. Procedură curățenie completă documentată. |
+| 2026-05-15 (târziu) | **Bug identificat:** chat sessions stochează file IDs în propriul JSON — chat-uri deschise după delete colecție au referințe stale, retrieval pică. Fix: forțat „+ New Chat", nu reutiliza chat-uri vechi. |
+| 2026-05-15 (târziu) | Install Docling-serve pe `/opt/docling` ca systemd `docling.service`. Deps sistem: `libgl1`, `libglib2.0-0`, `tesseract-ocr-ron`. `MemoryMax=10G` necesar (6G default = OOM la upload paralel). |
+| 2026-05-15 (târziu) | Eliminat reranker `bge-reranker-v2-m3` (lent pe CPU, ~30-60s/query). Decis că hybrid search + reranking se pot reactiva după patch bug + GPU sau cu reranker mai mic. |
+| 2026-05-15 (târziu) | Definite use cases: fermier finanțări (anti-halucinație critical) + FAQ rapid. Modele virtuale planificate: AgroBot Finanțări (Mistral + AFIR knowledge) + AgroBot FAQ (gpt-4.1-mini, fără knowledge forțat). |
+| 2026-05-15 | Upgrade Open WebUI **v0.8.10 → v0.9.5** (vezi entry-uri anterioare). |
 | 2026-05-15 | Fix: `bits-ui ^2.0.0` cere peer dep `@internationalized/date ^3.8.1` — adăugat explicit în `package.json` (upstream uită s-o declare). |
 | 2026-05-15 | Sync `Navbar.svelte`: eliminat gate `$user?.role === 'admin'` pe model selector — userii pot alege liber între modele (consistent cu commit `9a9828b` care a eliminat forțarea modelului). Editarea fusese făcută direct pe VPS în trecut, acum în git. |
 | 2026-05-15 | Upgrade Open WebUI **v0.8.10 → v0.9.5** (backend async cu psycopg v3, Calendar/Automations/Skills/Channels, RAG hybrid + reranking, `{{USER_GROUPS}}` în prompts, SSRF redirect blocking, iframe CSP). Re-portate: limită mesaj non-admin, injecție system prompt RO (cu `await apply_system_prompt_to_body` — funcția e async din 0.9.0), parametri model. 8 migrații DB noi rulează automat la primul start. Branch `upgrade-v0.9.5` păstrat în git pentru referință. |
