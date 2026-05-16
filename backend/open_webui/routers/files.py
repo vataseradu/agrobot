@@ -623,6 +623,21 @@ async def get_file_content_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
+    # === AgroBot: deny file content download for non-admin users ===
+    # Default Open WebUI permite access dacă fișierul e atașat la model public
+    # via has_access_to_file. Pentru AgroBot, NU vrem ca studenții să poată
+    # downloada PDF-urile sursă din knowledge — răspunsurile RAG sunt OK,
+    # dar PDF-urile rămân disponibile doar admin-ului.
+    AGROBOT_ADMIN_ONLY_FILE_DOWNLOAD = os.environ.get(
+        'AGROBOT_ADMIN_ONLY_FILE_DOWNLOAD', 'true'
+    ).lower() == 'true'
+    if AGROBOT_ADMIN_ONLY_FILE_DOWNLOAD and user.role != 'admin' and file.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='File download is restricted. Contact your administrator.',
+        )
+    # === End AgroBot ===
+
     if file.user_id == user.id or user.role == 'admin' or await has_access_to_file(id, 'read', user, db=db):
         try:
             file_path = await asyncio.to_thread(Storage.get_file, file.path)
