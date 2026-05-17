@@ -2,12 +2,43 @@
 
 ## Ce este AgroBot?
 
-AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.9.5), personalizat complet pentru fermierii și specialiștii din agricultura românească. Folosește modelele **Mistral Large** (`mistral-large-latest`) și **GPT-4.1 mini** (`gpt-4.1-mini`) pentru consultanță agricolă în limba română.
+AgroBot este un chatbot agricol bazat pe [Open WebUI](https://github.com/open-webui/open-webui) (v0.9.5), personalizat complet pentru fermierii și specialiștii din agricultura românească. Combină **LLM-uri de top** (Mistral Large, GPT-4.1) cu o **bibliotecă RAG de documente oficiale AFIR/APIA/MADR** pentru a oferi consultanță agricolă precisă, cu citarea surselor.
+
+## Arhitectură high-level (stare actuală, mai 2026)
+
+```
+                        ┌─────────────────────────────────────┐
+                        │  Studenți / fermieri (browser)       │
+                        └────────────────┬─────────────────────┘
+                                         │ HTTPS
+                                         ▼
+                        ┌─────────────────────────────────────┐
+                        │  Nginx (TLS, reverse proxy)          │
+                        └────────────────┬─────────────────────┘
+                                         │
+                                         ▼
+            ┌────────────────────────────────────────────────────────────┐
+            │  Open WebUI 0.9.5 — Backend FastAPI + SvelteKit frontend   │
+            │  - Auth, RBAC, chat history, model selector                │
+            │  - Custom AgroBot middleware (system prompt, parametri)    │
+            │  - Patch securitate (file download admin-only)             │
+            └─┬──────────────────┬─────────────────────────┬─────────────┘
+              │                  │                         │
+              ▼                  ▼                         ▼
+    ┌──────────────────┐ ┌────────────────┐  ┌────────────────────────┐
+    │  LLM Providers   │ │ Vector DB      │  │ OCR / Document Extract │
+    │  - Mistral Large │ │ Chroma (local) │  │ Mistral Document AI    │
+    │  - GPT-4.1-mini  │ │ 3072-dim       │  │ (cloud, FR)            │
+    │    (backup)      │ │ OpenAI embed   │  │                        │
+    │  (cloud APIs)    │ │ text-embed-3-L │  │                        │
+    └──────────────────┘ └────────────────┘  └────────────────────────┘
+```
 
 ## Cazuri de Utilizare (target)
 
-1. **Fermier căutând finanțare** — întrebări despre PNDR, AFIR, APIA, GAL, condiții de eligibilitate, sume, termene. **Necesită precizie maximă** — răspuns greșit poate face fermierul să piardă un dosar. Răspunde pe baza de Knowledge AFIR.
-2. **FAQ rapid pentru fermieri** — întrebări generale despre culturi, tratamente, zootehnie, legislație. Răspuns rapid, conversațional, fără sursă obligatorie.
+1. **Fermier căutând finanțare** — întrebări despre PNDR, AFIR, APIA, GAL, condiții de eligibilitate, sume, termene. **Necesită precizie maximă** — răspuns greșit poate face fermierul să piardă un dosar. Răspunde pe baza de Knowledge AFIR cu citare surse + pagină.
+2. **FAQ rapid pentru fermieri** — întrebări generale despre culturi, tratamente, zootehnie, legislație. Răspuns conversațional, ton de „vecin priceput".
+3. **Studenți agricoli** (10-20 conturi inițial) — auto-signup cu aprobare admin, acces restricționat (doar chat, fără workspace/admin).
 
 ---
 
@@ -719,10 +750,292 @@ systemctl start agrobot.service
 
 ---
 
+## Sesiunea 16-17 mai 2026 — Production Hardening + Mistral Document AI Migration
+
+Sesiunea cea mai impactantă din proiect — am rezolvat **toate** problemele de stabilitate și scalabilitate pe extracție document + setat aplicația pentru utilizare de către studenți.
+
+### Probleme atacate + soluții aplicate
+
+#### 1. Docling local instabil → switch la Mistral Document AI
+
+**Problema:** Docling self-hosted pe VPS (4 CPU, 16GB RAM) eșua sistematic la bulk upload:
+- OOM kill la 3+ workers paraleli (12GB RAM nu ajunge pentru 3 procese OCR concurente)
+- Gateway timeout 120s pe PDF-uri scanate mari (>2MB)
+- Sync directory feature procesa ~1 fișier/5min, multe eșuau silent
+- Bulk upload script bash trimitea cereri prea repede → Docling crashează → următoarele 47 fișiere returnau „empty content"
+
+**Soluție:** Migrare la **Mistral Document AI** (cloud OCR):
+- Setup în 5 minute (cheia Mistral existentă, schimb engine în Admin Panel)
+- **De 10-30x mai rapid** (5-15 sec/PDF vs 2-5 min)
+- Unlimited concurrent uploads (cloud scale)
+- Zero OOM, zero downtime
+- Cost: ~$0.005/pagină = **<$1 pentru tot lotul AFIR de 50+ documente**
+
+**Acțiune:** Docling-serve oprit definitiv pe VPS, ~5GB RAM eliberat.
+
+#### 2. RAG template anti-leak + handle off-topic
+
+**Problema:** Model răspundea:
+- „📄 Surse: Documentele AFIR din contextul furnizat..." — leak-uia că folosește RAG
+- „Nu am această informație... verifică pe afir.ro" pentru întrebări precum „explică-mi Python" (răspuns absurd pentru off-topic)
+- Inventa nume generice de surse („Planul Strategic PAC 2023-2027") chiar și când nu citise documentul
+
+**Soluție:** RAG template rescris cu reguli explicite:
+- NICIODATĂ să nu menționeze „context", „fragmente", „documente furnizate" — vorbește natural
+- Surse DOAR cu numele exacte ale documentelor citite (NU sintetizat/inventat)
+- Răspuns dedicat pentru întrebări off-topic, înainte de verificare context
+- 3 moduri de răspuns clar separate: agricultura cu sursă / agricultura fără info / off-topic
+
+#### 3. System prompt anti-halucinație la nivel de model
+
+**Problema:** RAG template strict, dar dacă cedează (model interpretează greșit), nu există fallback la nivel model.
+
+**Soluție:** System prompt dedicat pe model virtual „AgroBot" cu 2 moduri:
+- **MOD A (finanțări/legislație/cifre):** STRICT, DOAR documente, NU inventează coduri/sume/articole
+- **MOD B (sfaturi generale agricole):** conversațional, cunoștințe generale OK, recomandă specialist pentru cazuri specifice
+
+3 straturi de protecție anti-halucinație: middleware system prompt → model system prompt → RAG template.
+
+#### 4. Patch securitate: file download admin-only
+
+**Problema:** Open WebUI 0.9.5 implicit: orice user autentificat poate accesa `/api/v1/files/{id}/content` dacă fișierul e atașat la un model PUBLIC (via `has_access_to_file`). Pentru AgroBot (model public cu AFIR knowledge), asta înseamnă **studenții pot descărca PDF-urile AFIR direct prin URL** clicking pe citation cards.
+
+**Soluție:** Patch backend `backend/open_webui/routers/files.py:611` — blochează endpoint pentru non-admin, returnează 403. Toggle via env var `AGROBOT_ADMIN_ONLY_FILE_DOWNLOAD=true`. Citations apar în UI, dar click → 403 pentru studenți.
+
+**Impact:** Răspunsul rămâne cu surse text (gen „Conform Ghidului DR 26..."), dar PDF-urile sursă rămân private. Util pentru:
+- Aesthetics: aplicația nu arată ca file browser
+- Bandwidth: studenții nu pot descărca repetat PDF-uri mari
+- IP: chiar dacă docs AFIR sunt publice, controlăm distribuția
+
+#### 5. Modelele virtuale + configurare permisiuni utilizatori
+
+**Setup final pentru studenți:**
+- 1 model virtual public **AgroBot** (Mistral Large + AFIR knowledge atașată automat)
+- gpt-4.1-mini disponibil ca backup în dropdown
+- Knowledge AFIR **Private** (nu apare la # autocomplete pentru studenți)
+- Permisiuni user restrictive: Workspace OFF, Chat controls OFF, Web upload OFF
+- Signup ENABLED cu rol implicit `pending` (admin aprobă)
+
+### Stack tehnologic final (16-17 mai 2026)
+
+| Layer | Tehnologie | Cost | De ce |
+|---|---|---|---|
+| **Frontend** | SvelteKit (Open WebUI) | Free | Component library matur, RBAC built-in |
+| **Backend** | FastAPI + Uvicorn async (Open WebUI) | Free | Performance, ecosistem Python pentru AI |
+| **Auth** | Open WebUI internal (email/password) | Free | Built-in, RBAC granular |
+| **Vector DB** | Chroma (local SQLite) | Free | Funcțional până la ~100K chunks |
+| **OCR/Extract** | **Mistral Document AI** (cloud) | ~$5/lună | Top quality, zero infrastructure, EU GDPR |
+| **Embeddings** | OpenAI `text-embedding-3-large` | ~$0.20/lună | 3072-dim, excelent pe RO |
+| **LLM Primary** | Mistral Large (cloud) | ~€20/lună | Top RO, anti-halucinație |
+| **LLM Backup** | GPT-4.1-mini (cloud) | ~$5-15/lună | Ieftin, rate-limit independent |
+| **Reranker** | Disabled (CPU prea lent) | - | Re-evaluat cu GPU/Cohere API |
+| **VPS** | Hostinger 4CPU/16GB | ~$15-20/lună | Suficient pentru MVP |
+| **Domain + SSL** | Existing | - | Let's Encrypt planificat |
+| **TOTAL MVP** | | **~$50-70/lună** | Pentru 20-100 useri simultan |
+
+---
+
+## 🚀 Roadmap Producție Avansat (multi-tier)
+
+Plan pentru evoluția aplicației, cu opțiuni la diferite nivele de finanțare. Toate sunt **smart upgrades** (impact mare, cost moderat) — nu „nice-to-have" generic.
+
+### 🥉 TIER STANDARD — MVP curent + îmbunătățiri ieftine (~$50-100/lună)
+
+Optimizări care merită făcute imediat, fără costuri suplimentare semnificative.
+
+**1. Switch reranker la Cohere Rerank API**
+- Bug Hybrid Search 0.9.5 încă blochează BM25 local
+- **Cohere Rerank 3** (rerank-multilingual-v3): $1/1K queries
+- Pentru 6000 queries/lună = **~$6/lună** — calitate retrieval +20-30%
+- Cloud API, fără CPU local, latență ~100ms
+- Soluție: în Open WebUI Admin → Settings → Documents → Reranking → External API
+
+**2. Migrare embeddings la VoyageAI sau Cohere multilingual**
+- OpenAI 3-large e excelent, dar VoyageAI/Cohere sunt optimizate explicit pe RO multilingual
+- **Cohere Embed Multilingual v3**: $0.10/M tokens (mai ieftin decât OpenAI 3-large)
+- **VoyageAI voyage-3-large**: $0.18/M tokens, calitate similar/mai bună
+- Trade-off: necesită re-index întreaga colecție AFIR (one-time cost ~$1)
+
+**3. Auto-sync documente AFIR de pe sursa publică**
+- Script Python care monitorizează `afir.ro/documente` + `madr.ro` zilnic
+- Detectează ordine/hotărâri noi → download → upload prin API la AgroBot
+- Cost dezvoltare: ~1 zi
+- Benefit: knowledge mereu up-to-date fără intervenție manuală
+
+**4. Monitoring de bază (Uptime Robot + Plausible)**
+- **Uptime Robot** (free tier): notificare email când AgroBot e down
+- **Plausible Analytics** (~$10/lună): tracking traffic, fără cookies (GDPR-friendly)
+- Vezi câți studenți folosesc, când, ce întrebări pun
+
+**5. Backup automat webui.db zilnic**
+- Cron: `0 2 * * * cp webui.db /backup/webui-$(date +\%Y\%m\%d).db && find /backup -mtime +30 -delete`
+- Off-site backup la GitHub private repo (encrypted) sau S3 Glacier (~$0.10/lună)
+
+**Cost Tier Standard:** ~$60-100/lună total
+
+---
+
+### 🥈 TIER PREMIUM — Pentru proiect cu finanțare moderată (~$200-500/lună)
+
+Aplicație profesionistă, comparabilă cu produse comerciale. Recomandate dacă obținem grant academic / finanțare UE / sponsor.
+
+**1. LLM upgrade: Claude Sonnet 4.6 ca primary** ⭐
+- **Cel mai bun model pentru RAG agricultural în RO actualmente**
+- Cost: $3/M in, $15/M out → ~$30-50/lună pentru 20 studenți
+- Avantaje față de Mistral Large:
+  - Urmărire instrucțiuni mai bună (anti-halucinație built-in)
+  - Citare surse naturală
+  - Context window 200K tokens (vs 128K Mistral)
+- Setup: Admin → Connections → Anthropic API, cheie nouă
+- Mistral Large rămâne ca fallback
+
+**2. Reranker GPU + hybrid search activ**
+- Cohere Rerank deja activ în Tier Standard
+- **Plus**: re-activăm hybrid search după ce upstream Open WebUI fix-uiește bug (sau patch local)
+- BM25 prinde termeni exacți („submăsura 4.1.a", coduri ordine)
+- Vector prinde semantica → combinație ideală
+
+**3. OCR upgrade: Mistral DocAI + Azure Layout pentru tabele complexe**
+- Mistral DocAI pentru text general (excelent)
+- **Azure Document Intelligence Layout API** ($10/1000 pagini) pentru documente cu tabele financiare complexe
+- Detectare automată: dacă document AFIR are tabele cu sume/eligibilitate → routing la Azure pentru extragere structurată
+- Combinație calitate maximă
+
+**4. Vector DB upgrade: Qdrant Cloud sau Pinecone**
+- Chroma local OK până la 100K chunks; pentru 1000+ docs AFIR + actualizări zilnice → managed
+- **Qdrant Cloud**: $25/lună starter, hybrid search native, RBAC built-in
+- **Pinecone Serverless**: pay-per-query, ~$10-30/lună la volumul nostru
+- Avantaje: backup automat, snapshot/restore, multi-region replication
+
+**5. Monitoring profesionist**
+- **Grafana Cloud** (free tier 10K series): dashboards pentru request rate, latency, error rate
+- **Sentry** ($26/lună starter): error tracking, performance monitoring
+- **Logtail / Better Stack** ($25/lună): log aggregation
+- Vezi în timp real probleme + alerts proactive
+
+**6. Infrastructure upgrade: VPS dedicat sau Hetzner Cloud**
+- **Hetzner CCX23**: 8 vCPU dedicat / 32 GB RAM / 240 GB NVMe → **€40/lună**
+- Mult mai bun decât Hostinger shared
+- Sau **AWS EC2 t3.xlarge spot** cu auto-scaling
+
+**7. CDN + WAF**
+- **Cloudflare Pro** ($25/lună): CDN global pentru static assets, DDoS protection, WAF
+- Sau **Bunny CDN** ($5/lună): mai ieftin, similar quality
+- Cache aggressive pe imagini, fonturi, JS bundles → first paint sub 1 secundă global
+
+**Cost Tier Premium:** ~$250-450/lună total
+
+---
+
+### 🥇 TIER TOP — Aplicație de „top" pentru competiție / scale național (~$1000-2500/lună)
+
+Pentru ambiție mare — dacă AgroBot devine instrument oficial folosit la nivel regional sau național (zeci de mii de fermieri).
+
+**1. LLM Multi-model routing inteligent**
+- **Claude Opus 4.7** pentru întrebări complex (raționament multi-step, analize comparare submăsuri): $15/M in, $75/M out, ~$50-100/lună pentru cazuri critice
+- **GPT-5** când disponibil — pentru calitate maximă în RO + reasoning
+- **Claude Sonnet 4.6** pentru queries standard
+- **Mistral Large** ca fallback EU-only (pentru date sensibile)
+- Routing automat în funcție de complexitate query (gpt-4.1-mini pentru saluturi, Opus pentru analize de finanțări complexe)
+
+**2. Vector DB cu hybrid search + reranking unlimited**
+- **Pinecone Enterprise** sau **Weaviate Cloud Production**: ~$300-500/lună
+- Multi-region replication, 99.99% SLA, hybrid search native cu BM25 + vector
+- Susține 100K+ docs și milioane queries/lună
+
+**3. Custom OCR pipeline cu ensemble**
+- Mistral DocAI + Azure Document Intelligence + AWS Textract în paralel
+- Voting mecanism: dacă 2 din 3 OCR-uri returnează same text → high confidence
+- Pentru documente unde diferă → human-in-the-loop review (interfață admin)
+- Cost: ~$100-300/lună pentru 10K pagini
+
+**4. Knowledge base multi-sursă cu auto-sync zilnic**
+- Pipeline care monitorizează:
+  - afir.ro (toate categoriile)
+  - apia.org.ro
+  - madr.ro
+  - portal-legislatie.just.ro (hotărâri/ordonanțe agricole)
+  - Monitorul Oficial (relevante)
+- Web scraping respectând robots.txt + rate limits
+- Diff detection (procesează DOAR docs noi/modificate)
+- Notificare admin la documente importante (ex. ghid nou submăsură)
+
+**5. SSO universitar + multi-tenant**
+- Integrare **EduGAIN / SAML** pentru universități agricole
+- Studenții se loghează cu credențialele USAMV / UAS Bucureşti
+- Organisations: fiecare facultate = tenant separat cu knowledge customizat
+- Audit log complet pentru compliance academic
+
+**6. Analytics avansate + A/B testing**
+- Track most-asked questions → identify gaps în knowledge
+- A/B test diferite prompt-uri → optimize automatic
+- **RLHF feedback loop**: studenții dau thumbs up/down → date pentru fine-tuning periodic
+- Dashboards profesori: ce subiecte sunt încețerite, scor satisfacție
+
+**7. Native mobile apps (iOS + Android)**
+- React Native sau Flutter, ~$3000-5000 dezvoltare one-time
+- Push notifications pentru deadline-uri APIA / AFIR
+- Funcționalitate offline pentru documente recente (cache)
+- ~$200/lună Apple Developer + Google Play
+
+**8. High-availability infrastructure**
+- **Kubernetes cluster** (3 noduri, multi-AZ)
+- **PostgreSQL managed** (AWS RDS / DO Managed DB) cu read replicas
+- **Redis ElastiCache** pentru session + embedding cache
+- **Load balancer + auto-scaling** (2-10 nodes în funcție de load)
+- Cost: ~$400-800/lună
+- 99.95% SLA, scale la 10K+ useri simultani
+
+**9. AI Voice interface (pentru fermieri în vârstă)**
+- **OpenAI Realtime API** sau **ElevenLabs** pentru voce naturală RO
+- Fermierul vorbește, AgroBot răspunde verbal
+- Particular util pentru utilizatori cu literație digitală scăzută
+- ~$100-200/lună
+
+**10. Translations + alte limbi**
+- Maghiară pentru fermierii din Transilvania
+- Ucraineană pentru zona Banat / Maramureș
+- Multi-language UI prin i18next (Open WebUI deja suportă)
+- Embeddings multilingual deja gestionează RO+HU+UK în același spațiu
+
+**Cost Tier TOP:** ~$1500-2500/lună
+
+### 📊 Comparație impact tier-uri
+
+| Aspect | Standard ($50-100) | Premium ($250-450) | TOP ($1500-2500) |
+|---|---|---|---|
+| **Calitate răspunsuri** | Foarte bună (Mistral Large) | Top (Claude Sonnet 4.6) | Maximă (Opus + ensemble) |
+| **Halucinare** | Mică | Foarte mică | Aproape zero |
+| **Useri simultani** | 20-50 | 200-500 | 10000+ |
+| **Update knowledge** | Manual săptămânal | Auto-sync zilnic | Real-time + alerts |
+| **Uptime** | 99% (single VPS) | 99.5% (managed services) | 99.95% (K8s HA) |
+| **Surse documente** | AFIR knowledge manual | AFIR + APIA + MADR auto | + Monitorul Oficial + EU |
+| **Voice interface** | ❌ | ❌ | ✅ |
+| **Mobile app native** | ❌ (web only) | ❌ | ✅ |
+| **SSO universitar** | ❌ | ❌ | ✅ |
+| **Multi-language** | RO only | RO only | RO + HU + UK |
+
+### 🎯 Recomandare pentru pitch finanțatori
+
+**Pentru un proiect academic / TFL (proof of concept):** Tier Standard e mai mult decât suficient. Demo solid cu cost mic.
+
+**Pentru un grant academic / proiect doctorat:** Tier Premium — calitate comercială, justificabil ca cercetare aplicată.
+
+**Pentru un grant UE Horizon / parteneriat MADR:** Tier TOP — infrastructură pentru milioane de fermieri, impact național, justificabil cu ROI clar (creștere absorbție fonduri europene cu X% prin asistență AI).
+
+---
+
 ## Istoric Modificări
 
 | Data | Descriere |
 |---|---|
+| 2026-05-17 | **Documentare comprehensivă pentru pitch finanțatori**: stack tehnologic complet, roadmap multi-tier (Standard $50/lună → Premium $300/lună → TOP $2000/lună). Include comparații concrete cost/calitate, opțiuni real-world (Cohere Rerank, Claude Sonnet 4.6, Pinecone, SSO universitar, voice interface). |
+| 2026-05-17 | **Patch securitate critic**: `backend/open_webui/routers/files.py` blochează endpoint `/api/v1/files/{id}/content` pentru non-admin. Studenții NU mai pot descărca PDF-uri AFIR direct prin click pe citations. Toggle via `AGROBOT_ADMIN_ONLY_FILE_DOWNLOAD=true` (default). |
+| 2026-05-17 | **System prompt model AgroBot** — 2 moduri (strict pentru finanțări + conversațional pentru sfaturi generale). 3 straturi anti-halucinație (middleware + model + RAG template). |
+| 2026-05-17 | **RAG template anti-leak**: niciodată nu mai menționează „context"/„fragmente"/„documente furnizate". Răspuns dedicat pentru off-topic („eu sunt specializat doar în agricultură"). Surse DOAR cu nume exacte din documente citite. |
+| 2026-05-17 | **Mistral Document AI activat** ca OCR engine (înlocuiește Docling). 10-30x mai rapid, zero OOM, ~$5/lună costuri totale. Docling-serve oprit pe VPS, ~5GB RAM eliberat. |
+| 2026-05-16 | **Diagnoză bulk upload**: script bash, sync directory, manual UI — toate testate. Concluzie: Docling self-hosted pe CPU nu scalează > 2 workers paraleli. Need cloud OCR pentru producție. |
+| 2026-05-16 | **Docling tuning** (înainte de migrare DocAI): `force_full_page_ocr=true`, `ocr_engine=tesseract`, `ocr_lang=ron,eng`, `MemoryMax=12G`, `DOCLING_SERVE_MAX_SYNC_WAIT=900`. Rezolvă PDF-uri scanate dar instabil la load. |
 | 2026-05-15 (târziu) | **Pipeline RAG complet funcțional** end-to-end. Stack final: Docling (`http://127.0.0.1:5001`) + OpenAI `text-embedding-3-large` + Chroma vector store + custom RAG template strict. Test E2E OK: query pe `hg-81-2026.pdf` → răspuns precis cu page citations. Setări RAG: chunk 1500/overlap 250, Token splitter, Markdown header splitter ON, threshold 0, Hybrid OFF (bug 0.9.5). |
 | 2026-05-15 (târziu) | **Bug identificat:** Hybrid Search în Open WebUI 0.9.5 returnează `[[]]` empty silent → model halucinează. Cauză: `EnsembleRetriever` cu BM25 fail silent. Workaround: Hybrid OFF, vector-only retrieval. Documentat în secțiunea „Bug Hybrid Search". |
 | 2026-05-15 (târziu) | **Bug identificat:** Open WebUI delete colecție în UI NU cascade-deletes orfani în `file`/`vector_db`. Stale file IDs causează „Failed to fetch collection" errors. Procedură curățenie completă documentată. |
